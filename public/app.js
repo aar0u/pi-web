@@ -326,8 +326,11 @@ async function loadSessions() {
     title.textContent = s.name || s.firstMessage || "(empty session)";
     const meta = document.createElement("div");
     meta.className = "session-meta";
-    meta.textContent = `${s.messageCount} msg · ${new Date(s.modified).toLocaleString()} · ${s.cwd || ""}`;
-    main.append(title, meta);
+    meta.textContent = `${s.messageCount} msg · ${new Date(s.modified).toLocaleString()}`;
+    const cwd = document.createElement("div");
+    cwd.className = "session-cwd";
+    cwd.textContent = s.cwd || "";
+    main.append(title, meta, cwd);
     const del = document.createElement("button");
     del.className = "delete icon-button";
     del.title = "Delete session";
@@ -347,10 +350,19 @@ async function loadSessions() {
   }
 }
 
+function formatSessionPath(path) {
+  if (!path) return { name: "", parent: "" };
+  const parts = path.split(/[/\\]/);
+  const name = parts[parts.length - 1] || "";
+  const parent = parts[parts.length - 2] || "";
+  return { name, parent };
+}
+
 function updateChrome(data) {
   state.data = data;
   $("cwd").value = data.cwd || "";
-  $("status").textContent = `${data.cwd || ""}  ·  ${data.sessionFile || "new session"}`;
+  const { name, parent } = formatSessionPath(data.sessionFile);
+  $("status").textContent = parent ? `${parent}/${name}` : name || "new session";
 }
 
 async function refresh(opts = {}) {
