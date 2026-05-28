@@ -11,6 +11,21 @@ function renderMarkdown(text, container) {
     if (m[1]) code.className = `language-${m[1]}`;
     if (window.hljs) hljs.highlightElement(code);
     pre.append(code);
+    if (m[1]) {
+      const lang = document.createElement("span");
+      lang.className = "code-lang";
+      lang.textContent = m[1];
+      pre.append(lang);
+    }
+    const copy = document.createElement("button");
+    copy.className = "code-copy";
+    copy.textContent = "Copy";
+    copy.onclick = () => {
+      navigator.clipboard.writeText(code.textContent);
+      copy.textContent = "Copied!";
+      setTimeout(() => (copy.textContent = "Copy"), 1500);
+    };
+    pre.append(copy);
     container.append(pre);
     last = m.index + m[0].length;
   }

@@ -52,5 +52,9 @@ main { display: grid; grid-template-rows: auto 1fr auto; min-width: 0; height: 1
 #prompt { resize: vertical; max-height: 40vh; min-height: 48px; }
 #send { min-width: 44px; width: 44px; height: 42px; }
 .small { font-size: 11px; color: #84796c; }
-.code-block { margin: 8px 0; padding: 10px; background: #f6f3ed; border: 1px solid #e0d8cc; border-radius: 6px; overflow-x: auto; }
+.code-block { position: relative; margin: 8px 0; padding: 10px; background: #f6f3ed; border: 1px solid #e0d8cc; border-radius: 6px; overflow-x: auto; }
 .code-block code { font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, Consolas, monospace; font-size: 13px; line-height: 1.4; }
+.code-lang { position: absolute; top: 4px; right: 8px; font-size: 10px; color: #8a7d6d; text-transform: uppercase; pointer-events: none; }
+.code-copy { position: absolute; top: 4px; right: 8px; font-size: 10px; padding: 2px 6px; border-radius: 3px; opacity: 0; transition: opacity 0.2s; }
+.code-block:hover .code-copy { opacity: 1; }
+.code-lang + .code-copy { right: 50px; }
