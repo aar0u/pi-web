@@ -467,6 +467,7 @@ async function sendPrompt(text) {
   let activeToolPart = null;
   let gotVisibleResponse = false;
   let timedOut = false;
+  let latestPromptState = null;
   let lastStreamEventAt = Date.now();
   const startTime = Date.now();
   const progressInterval = setInterval(() => {
@@ -519,7 +520,7 @@ async function sendPrompt(text) {
         if (!visibleText) continue;
         const text = document.createElement("div");
         text.className = "turn-text";
-        text.textContent = visibleText;
+        renderMarkdown(visibleText, text);
         assistant.body.append(text);
         continue;
       }
@@ -588,9 +589,15 @@ async function sendPrompt(text) {
           markVisible();
           assistant.el.classList.add("error");
           assistant.body.textContent = evt.message || "Unknown error";
-          if (evt.state) state.data = evt.state;
+          if (evt.state) {
+            latestPromptState = evt.state;
+            state.data = evt.state;
+          }
         }
-        if ((evt.type === "done" || evt.type === "state") && evt.state) state.data = evt.state;
+        if ((evt.type === "done" || evt.type === "state") && evt.state) {
+          latestPromptState = evt.state;
+          state.data = evt.state;
+        }
       }
       scrollChatToBottom();
     }
@@ -612,7 +619,12 @@ async function sendPrompt(text) {
     state.abortController = null;
     state.abortRequested = false;
     setStreamingUi(false);
-    if (!timedOut) await syncStateWithoutRerender().catch(() => markBackendOffline());
+    if (!timedOut && latestPromptState) {
+      renderState(latestPromptState);
+      await loadSessions().catch(() => markBackendOffline());
+    } else if (!timedOut) {
+      await syncStateWithoutRerender().catch(() => markBackendOffline());
+    }
   }
 }
 
