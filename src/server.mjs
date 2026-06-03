@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { apiToken, host, port, publicDir } from "./config.mjs";
+import { allowRemote, apiToken, host, isLoopbackHost, port, publicDir } from "./config.mjs";
 import { HttpError, readBody, sendError, sendJson, writeNdjson } from "./http.mjs";
 import { makeRuntime, SessionManager } from "./pi-runtime.mjs";
 import { registerFilesRoutes } from "./routes/files.mjs";
@@ -59,6 +59,46 @@ async function withRuntimeMutation(fn) {
   } finally {
     operationState = "idle";
   }
+}
+
+const colors = process.stdout.isTTY ? {
+  reset: "\x1b[0m",
+  dim: "\x1b[2m",
+  green: "\x1b[32m",
+  yellow: "\x1b[33m",
+  red: "\x1b[31m",
+  cyan: "\x1b[36m",
+} : { reset: "", dim: "", green: "", yellow: "", red: "", cyan: "" };
+
+function color(value, code) {
+  return `${code}${value}${colors.reset}`;
+}
+
+function clientAddress(req) {
+  return req.socket.remoteAddress || "unknown";
+}
+
+function statusColor(status) {
+  if (status >= 500) return colors.red;
+  if (status >= 400) return colors.yellow;
+  return colors.green;
+}
+
+function logRequest(req, res, url) {
+  const started = Date.now();
+  let logged = false;
+  const write = (event = "") => {
+    if (logged) return;
+    logged = true;
+    const status = res.statusCode || 0;
+    const duration = Date.now() - started;
+    const suffix = event ? ` ${color(event, colors.red)}` : "";
+    console.log(`${color(req.method, colors.cyan)} ${url.pathname} ${color(status, statusColor(status))} ${color(`${duration}ms`, colors.dim)}${suffix} ${color(clientAddress(req), colors.dim)}`);
+  };
+  res.once("finish", () => write());
+  res.once("close", () => {
+    if (!res.writableEnded) write("aborted");
+  });
 }
 
 const apiRoutes = new Map();
@@ -185,6 +225,7 @@ const server = createServer((req, res) => {
     return;
   }
 
+  logRequest(req, res, url);
   if (url.pathname.startsWith("/api/")) void handleApi(req, res, url);
   else serveStatic(req, res, url.pathname, publicDir);
 });
@@ -203,6 +244,11 @@ process.on("SIGINT", () => void shutdown("SIGINT"));
 process.on("SIGTERM", () => void shutdown("SIGTERM"));
 
 server.listen(port, host, () => {
-  console.log(`pi-web listening at http://${host}:${port}`);
+  console.log(`${color("pi-web", colors.cyan)} listening at ${color(`http://${host}:${port}`, colors.green)}`);
   console.log(`cwd: ${cwd}`);
+  console.log(`host: ${host}`);
+  console.log(`port: ${port}`);
+  console.log(`allow remote: ${allowRemote ? color("yes", colors.yellow) : "no"}`);
+  console.log(`loopback host: ${isLoopbackHost ? color("yes", colors.green) : color("no", colors.yellow)}`);
+  console.log(`api token: ${apiToken ? color("enabled", colors.green) : "disabled"}`);
 });

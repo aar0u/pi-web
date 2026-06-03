@@ -32,74 +32,21 @@ function systemPromptOf(session) {
   return state && "systemPrompt" in state ? (state.systemPrompt ?? "") : null;
 }
 
-function treeDisplayText(entry) {
-  if (entry.type !== "message" || !entry.message) return entry.type || "entry";
-  const role = entry.message.role || "assistant";
-  const text = textOfContent(entry.message.content) || entry.message.errorMessage || entry.message.toolName || "";
-  return `${role}: ${text}`.replace(/\s+/g, " ").trim();
-}
-
 function treeItems(roots, activeLeafId, activeIds) {
-  const containsActive = new Map();
-  const allNodes = [];
-  const preOrder = [...roots].reverse();
-  while (preOrder.length) {
-    const node = preOrder.pop();
-    allNodes.push(node);
-    for (let i = node.children.length - 1; i >= 0; i--) preOrder.push(node.children[i]);
-  }
-  for (let i = allNodes.length - 1; i >= 0; i--) {
-    const node = allNodes[i];
-    let hasActive = Boolean(activeLeafId && node.entry?.id === activeLeafId);
-    for (const child of node.children) hasActive = hasActive || containsActive.get(child) === true;
-    containsActive.set(node, hasActive);
-  }
-
-  const orderedChildren = (children) => {
-    const active = [];
-    const rest = [];
-    for (const child of children) {
-      if (containsActive.get(child)) active.push(child);
-      else rest.push(child);
-    }
-    return [...active, ...rest];
-  };
-
-  const rows = [];
-  const multipleRoots = roots.length > 1;
-  const orderedRoots = [...roots].sort((a, b) => Number(containsActive.get(b)) - Number(containsActive.get(a)));
-  const stack = [];
-  for (let i = orderedRoots.length - 1; i >= 0; i--) {
-    stack.push([orderedRoots[i], multipleRoots ? 1 : 0, multipleRoots, multipleRoots, i === orderedRoots.length - 1, multipleRoots]);
-  }
-
-  while (stack.length) {
-    const [node, indent, justBranched, showConnector, isLast, isVirtualRootChild] = stack.pop();
+  const itemOf = (node) => {
     const entry = node.entry;
-    const depth = multipleRoots ? Math.max(0, indent - 1) : indent;
-    const connector = showConnector && !isVirtualRootChild ? (isLast ? "└" : "├") : (depth > 0 ? "│" : "");
-    rows.push({
+    return {
       id: entry.id,
       parentId: entry.parentId,
       timestamp: entry.timestamp,
       type: entry.type,
-      role: entry.message?.role,
-      text: treeDisplayText(entry),
-      depth,
-      connector,
+      message: entry.message,
       active: activeIds.has(entry.id),
       current: entry.id === activeLeafId,
-      message: entry.type === "message" && Boolean(entry.message),
-    });
-
-    const children = orderedChildren(node.children);
-    const multipleChildren = children.length > 1;
-    const childIndent = multipleChildren ? indent + 1 : (justBranched && indent > 0 ? indent + 1 : indent);
-    for (let i = children.length - 1; i >= 0; i--) {
-      stack.push([children[i], childIndent, multipleChildren, multipleChildren, i === children.length - 1, false]);
-    }
-  }
-  return rows;
+      children: (node.children || []).map(itemOf),
+    };
+  };
+  return roots.map(itemOf);
 }
 
 function contentParts(content) {

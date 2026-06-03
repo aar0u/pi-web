@@ -43,7 +43,9 @@ main { position: relative; display: grid; grid-template-rows: auto 1fr auto; min
 .inspector-panel { position: absolute; z-index: 15; top: 38px; right: 12px; width: min(620px, calc(100% - 24px)); max-height: min(46vh, 420px); overflow: auto; border: 1px solid #d8d0c3; border-radius: 12px; padding: 10px; background: #fffdf8; color: #5f574d; box-shadow: 0 12px 36px #00000024; font: 12px/1.5 ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, Consolas, monospace; white-space: pre-wrap; }
 .inspector-panel.empty { color: #8a7d6d; font-family: inherit; font-style: italic; }
 .tree-view { display: flex; flex-direction: column; gap: 2px; font-family: inherit; white-space: normal; }
-.tree-node { width: 100%; border: 0; background: transparent; border-radius: 7px; padding: 4px 6px; display: grid; grid-template-columns: 12px auto 1fr auto; gap: 6px; align-items: baseline; text-align: left; color: #5f574d; position: relative; }
+.tree-group { display: flex; flex-direction: column; gap: 2px; }
+.tree-children { margin-left: 16px; padding-left: 8px; border-left: 1px solid #e5dccf; display: flex; flex-direction: column; gap: 2px; }
+.tree-node { width: 100%; border: 0; background: transparent; border-radius: 7px; padding: 4px 6px; display: grid; grid-template-columns: auto 1fr auto; gap: 6px; align-items: baseline; text-align: left; color: #5f574d; position: relative; }
 .tree-node:hover { background: #f0e9dc; }
 .tree-node.active { color: #25231f; background: #faf4e8; }
 .tree-node.current { box-shadow: inset 3px 0 0 #9f7430; }

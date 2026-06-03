@@ -15,6 +15,60 @@ function messageText(m) {
   return m.role === "assistant" ? "waiting…" : "";
 }
 
+function shortJson(value) {
+  if (value === undefined) return "";
+  try {
+    return typeof value === "string" ? value : JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function textOfTreeContent(content) {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((part) => {
+      if (part && typeof part === "object" && typeof part.text === "string") return part.text;
+      if (part && typeof part === "object" && typeof part.thinking === "string") return part.thinking;
+      if (part && typeof part === "object" && typeof part.name === "string") {
+        const details = shortJson(part.input ?? part.arguments ?? part.args);
+        return details ? `[tool: ${part.name}] ${details}` : `[tool: ${part.name}]`;
+      }
+      return "";
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+function isToolOnlyTreeContent(content) {
+  if (!Array.isArray(content) || !content.length) return false;
+  let hasTool = false;
+  for (const part of content) {
+    if (!part || typeof part !== "object") continue;
+    if (typeof part.text === "string" && part.text.trim()) return false;
+    if (typeof part.thinking === "string" && part.thinking.trim()) return false;
+    if (typeof part.name === "string" && part.name) hasTool = true;
+  }
+  return hasTool;
+}
+
+function shouldShowTreeItem(item) {
+  if (item.type !== "message" || !item.message) return false;
+  const role = item.message.role || "assistant";
+  if (role === "user") return true;
+  if (role !== "assistant") return false;
+  if (item.message.errorMessage || item.message.isError) return true;
+  return !isToolOnlyTreeContent(item.message.content);
+}
+
+function treeItemText(item) {
+  if (item.type !== "message" || !item.message) return item.type || "entry";
+  const role = item.message.role || "assistant";
+  const text = textOfTreeContent(item.message.content) || item.message.errorMessage || item.message.toolName || "";
+  return `${role}: ${text}`.replace(/\s+/g, " ").trim();
+}
+
 function canCollapse(m) {
   return m.role === "user" || m.role === "assistant" || m.role === "toolResult" || m.role === "bashExecution" || m.role === "custom";
 }
@@ -414,28 +468,52 @@ function locateMessage(entryId) {
 
 function treeNodeButton(item) {
   const node = document.createElement("button");
+  const textValue = treeItemText(item);
   node.type = "button";
   node.className = `tree-node ${item.active ? "active" : "off-branch"} ${item.current ? "current" : ""}`;
-  node.title = item.text || item.id;
+  node.title = textValue || item.id;
   node.onclick = () => locateMessage(item.id);
-  node.style.paddingLeft = `${6 + Math.min(item.depth || 0, 8) * 14}px`;
-  const connector = document.createElement("span");
-  connector.className = "tree-connector";
-  connector.textContent = item.connector === "└" ? "↳" : (item.connector || "");
   const marker = document.createElement("span");
   marker.className = "tree-marker";
   marker.textContent = item.current ? "●" : (item.active ? "•" : "○");
   const text = document.createElement("span");
   text.className = "tree-text";
-  text.textContent = item.text || item.id;
+  text.textContent = textValue || item.id;
   const role = document.createElement("span");
   role.className = "tree-role";
-  role.textContent = item.role || item.type;
+  role.textContent = item.message?.role || item.type;
   const id = document.createElement("span");
   id.className = "tree-id";
   id.textContent = item.id;
-  node.append(connector, marker, text, role, id);
+  node.append(marker, text, role, id);
   return node;
+}
+
+function hasVisibleTreeItem(item) {
+  if (shouldShowTreeItem(item)) return true;
+  return (item.children || []).some(hasVisibleTreeItem);
+}
+
+function visibleChildBranches(item) {
+  return (item.children || []).filter(hasVisibleTreeItem);
+}
+
+function appendTreeItem(container, item) {
+  const visible = shouldShowTreeItem(item);
+  const childBranches = visibleChildBranches(item);
+  let childContainer = container;
+  if (visible) {
+    const group = document.createElement("div");
+    group.className = "tree-group";
+    group.append(treeNodeButton(item));
+    if (childBranches.length > 1) {
+      childContainer = document.createElement("div");
+      childContainer.className = "tree-children";
+      group.append(childContainer);
+    }
+    container.append(group);
+  }
+  for (const child of childBranches) appendTreeItem(childContainer, child);
 }
 
 function renderTreePanel(data = state.data) {
@@ -450,10 +528,8 @@ function renderTreePanel(data = state.data) {
 
   const tree = document.createElement("div");
   tree.className = "tree-view";
-  for (const item of items) {
-    if (item.message) tree.append(treeNodeButton(item));
-  }
-  if (!tree.childElementCount) {
+  for (const item of items) appendTreeItem(tree, item);
+  if (!tree.querySelector(".tree-node")) {
     panel.textContent = "No message nodes in this tree.";
   } else {
     panel.append(tree);
