@@ -116,6 +116,7 @@ main { position: relative; display: grid; grid-template-rows: auto minmax(0, 1fr
 .msg-actions.assistant-actions { align-self: flex-start; }
 .msg-action { border: 0; background: transparent; width: auto; height: 22px; padding: 0 3px; display: inline-flex; align-items: center; gap: 3px; font-size: 11px; color: inherit; }
 .msg-action:hover { background: transparent; color: #8f6527; }
+.msg-time { margin-left: 2px; align-self: center; color: #a99c8b; font-variant-numeric: tabular-nums; }
 .collapse-indicator { color: #8a7d6d; display: inline-grid; place-items: center; }
 .turn-status { align-self: flex-start; max-width: 980px; margin-top: -10px; padding: 0 8px; font-size: 11px; color: #8a7d6d; white-space: nowrap; }
 .msg-body { padding: 9px 10px; white-space: normal; word-break: break-word; line-height: 1.38; }

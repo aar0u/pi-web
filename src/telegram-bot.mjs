@@ -5,6 +5,31 @@ function escapeText(value) {
   return String(value ?? "").replace(/\s+/g, " ").trim();
 }
 
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function formatInlineMarkdown(text) {
+  return escapeHtml(text)
+    .replace(/`([^`\n]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^\s*](?:[^*\n]*[^\s*])?)\*\*/g, "<b>$1</b>")
+    .replace(/(?<!\*)\*([^\s*](?:[^*\n]*[^\s*])?)\*(?!\*)/g, "<i>$1</i>");
+}
+
+function markdownToTelegramHtml(value) {
+  const text = String(value ?? "").trim();
+  const chunks = text.split(/(```[\s\S]*?```)/g);
+  return chunks.map((chunk) => {
+    const code = chunk.match(/^```[^\n]*\n?([\s\S]*?)```$/);
+    if (code) return `<pre>${escapeHtml(code[1].trim())}</pre>`;
+    return formatInlineMarkdown(chunk);
+  }).join("");
+}
+
 function formatTask(task) {
   const status = task.confirmed ? task.status : "pending confirmation";
   return `${task.id}\n  ${status} · ${task.cron}\n  ${escapeText(task.prompt).slice(0, 160)}`;
@@ -33,26 +58,64 @@ export function startTelegramBot({ token, allowedChatId, taskStore, runner }) {
   }
 
   async function reply(chatId, text) {
-    await api("sendMessage", { chat_id: chatId, text: String(text).slice(0, 3900), disable_web_page_preview: true });
+    const raw = String(text ?? "").slice(0, 3900);
+    const html = markdownToTelegramHtml(raw);
+    try {
+      await api("sendMessage", { chat_id: chatId, text: html, parse_mode: "HTML", disable_web_page_preview: true });
+    } catch (error) {
+      await api("sendMessage", { chat_id: chatId, text: raw, disable_web_page_preview: true });
+    }
   }
 
   function chatAllowed(chatId) {
     return !allowedChatId || String(chatId) === String(allowedChatId);
   }
 
+  function tasksForChat(chatId) {
+    return taskStore.list().filter((task) => String(task.telegramChatId) === String(chatId));
+  }
+
+  function candidateTasksForCommand(chatId, type) {
+    const tasks = tasksForChat(chatId);
+    if (type === "confirm") return tasks.filter((task) => !task.confirmed);
+    if (type === "enable") return tasks.filter((task) => task.status !== "enabled" || !task.confirmed);
+    if (type === "disable") return tasks.filter((task) => task.status === "enabled" && task.confirmed);
+    if (type === "delete") return tasks;
+    return [];
+  }
+
+  function commandUsage(type) {
+    return `/${type} <task_id>`;
+  }
+
   async function handleTaskCommand(chatId, command) {
     if (command.type === "list") {
-      await reply(chatId, formatTasks(taskStore.list()));
+      await reply(chatId, formatTasks(tasksForChat(chatId)));
       return;
     }
-    if (command.type === "propose") {
+    if (command.type === "schedule-help") {
+      await reply(chatId, "Usage: /schedule <request>\nExample: /schedule every day at 9am summarize project status");
+      return;
+    }
+    if (command.type === "new") {
+      if (!runner.isIdle()) {
+        await reply(chatId, "pi is busy. Try /new again after the current response finishes.");
+        return;
+      }
+      await runner.resetTelegram();
+      await reply(chatId, "Started a new Telegram session.");
+      return;
+    }
+    if (command.type === "schedule") {
       if (!runner.isIdle()) await reply(chatId, "pi is busy. Task creation request was queued and will run shortly.");
       const proposal = await createTaskProposal({
         text: command.text,
         source: "telegram",
         telegramChatId: String(chatId),
         taskStore,
-        run: (input) => runner.enqueue(input),
+        run: (input) => runner.enqueueEphemeral(input),
+        isolated: true,
+        createIsolatedBinding: (input) => runner.createTaskSessionBinding(input),
       });
       if (!proposal.task) {
         await reply(chatId, proposal.proposal?.question || "pi needs more information to create this task.");
@@ -61,7 +124,15 @@ export function startTelegramBot({ token, allowedChatId, taskStore, runner }) {
       await reply(chatId, `Created pending task ${proposal.task.id}. Confirm with:\n/confirm ${proposal.task.id}\n\n${formatTask(proposal.task)}`);
       return;
     }
-    const task = taskStore.get(command.id);
+    let task = command.id ? taskStore.get(command.id) : null;
+    if (!command.id) {
+      const candidates = candidateTasksForCommand(chatId, command.type);
+      if (candidates.length === 1) task = candidates[0];
+      else {
+        await reply(chatId, candidates.length ? `Multiple matching tasks. Use ${commandUsage(command.type)}.` : `No matching task for /${command.type}.`);
+        return;
+      }
+    }
     if (!task) {
       await reply(chatId, "Task not found.");
       return;
@@ -98,12 +169,16 @@ export function startTelegramBot({ token, allowedChatId, taskStore, runner }) {
       await handleTaskCommand(chatId, command);
       return;
     }
+    if (text.startsWith("/")) {
+      await reply(chatId, "Unsupported command. Supported: /new, /schedule, /tasks, /confirm, /enable, /disable, /delete.");
+      return;
+    }
 
     if (!runner.isIdle()) {
       await reply(chatId, "pi is busy. Your message was queued and will run shortly.");
     }
-    const result = await runner.enqueue({ text: telegramPrompt(text), source: "telegram", telegramChatId: String(chatId) });
-    await reply(chatId, result.summary || "Done.");
+    const result = await runner.enqueueTelegram({ text: telegramPrompt(text), source: "telegram", telegramChatId: String(chatId) });
+    await reply(chatId, result.text || result.summary || "Done.");
   }
 
   async function poll() {
@@ -126,5 +201,8 @@ export function startTelegramBot({ token, allowedChatId, taskStore, runner }) {
   }
 
   void poll();
-  return { stop: () => { stopped = true; } };
+  return {
+    sendMessage: reply,
+    stop: () => { stopped = true; },
+  };
 }

@@ -98,7 +98,7 @@ function chatTurns(entries, toMessage) {
   const pendingTools = [];
   const ensureAssistant = () => {
     if (!assistant) {
-      assistant = { role: "assistant", ids: [], parts: [], error: false, errorDetail: "" };
+      assistant = { role: "assistant", ids: [], timestamp: null, parts: [], error: false, errorDetail: "" };
       turns.push(assistant);
     }
     return assistant;
@@ -120,6 +120,7 @@ function chatTurns(entries, toMessage) {
 
     const turn = ensureAssistant();
     turn.ids.push(entry.id);
+    if (!turn.timestamp) turn.timestamp = entry.timestamp;
     if (message.role === "assistant") {
       const detail = messageErrorDetail(message);
       turn.error = turn.error || Boolean(detail);

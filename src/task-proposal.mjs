@@ -24,7 +24,7 @@ function extractJsonObject(text) {
 
 function proposalPrompt(text) {
   const now = new Date();
-  return `You are helping pi-hub create a scheduled task from natural language.
+  return `You are helping to create a scheduled task from natural language.
 Current local time: ${now.toString()}
 
 User request:
@@ -54,15 +54,17 @@ function sessionBinding(state) {
   };
 }
 
-export async function createTaskProposal({ text, source, telegramChatId = null, taskStore, run }) {
+export async function createTaskProposal({ text, source, telegramChatId = null, taskStore, run, binding: existingBinding = null, isolated = false, createIsolatedBinding = null }) {
   if (typeof text !== "string" || !text.trim()) throw new HttpError(400, "Task request is empty");
-  const result = await run({ text: proposalPrompt(text.trim()), source: "task-proposal", telegramChatId });
+  const result = await run({ text: proposalPrompt(text.trim()), source, telegramChatId });
   const assistantText = lastAssistantText(result.state) || result.summary || "";
   const proposal = extractJsonObject(assistantText);
   if (proposal.error) return { task: null, proposal, assistantText, state: result.state };
 
   const cron = assertCron(proposal.cron);
   if (typeof proposal.prompt !== "string" || !proposal.prompt.trim()) throw new HttpError(400, "pi task proposal did not include a prompt");
+  if (isolated && typeof createIsolatedBinding !== "function") throw new HttpError(500, "Isolated task sessions are not available");
+  const binding = isolated ? await createIsolatedBinding({ source, telegramChatId }) : (existingBinding || sessionBinding(result.state));
   const task = await taskStore.create({
     prompt: proposal.prompt.trim(),
     cron,
@@ -70,7 +72,7 @@ export async function createTaskProposal({ text, source, telegramChatId = null, 
     confirmed: false,
     status: "disabled",
     telegramChatId,
-    ...sessionBinding(result.state),
+    ...binding,
   });
-  return { task, proposal: { ...proposal, cron, prompt: proposal.prompt.trim() }, assistantText, state: result.state };
+  return { task, proposal: { ...proposal, cron, prompt: proposal.prompt.trim(), isolated }, assistantText, state: result.state };
 }

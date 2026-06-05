@@ -2,13 +2,13 @@ import { HttpError, readBody, sendJson } from "../http.mjs";
 import { assertCron, nextCronRun } from "../cron.mjs";
 import { createTaskProposal } from "../task-proposal.mjs";
 
-function assertTaskInput(body, { partial = false } = {}) {
+function taskPatchInput(body) {
   const out = {};
-  if (!partial || "prompt" in body) {
+  if ("prompt" in body) {
     if (typeof body.prompt !== "string" || !body.prompt.trim()) throw new HttpError(400, "Task prompt is empty");
     out.prompt = body.prompt.trim();
   }
-  if (!partial || "cron" in body) out.cron = assertCron(body.cron);
+  if ("cron" in body) out.cron = assertCron(body.cron);
   return out;
 }
 
@@ -31,27 +31,25 @@ export function registerTasksRoutes(apiRoutes, { taskStore, promptRunner, curren
   });
 
   apiRoutes.set("POST /api/tasks", async (req, res, _url) => {
-    const input = assertTaskInput(await readBody(req));
-    const task = await taskStore.create({ ...input, source: "web", confirmed: true, status: "enabled", ...sessionBinding(currentState()) });
-    sendJson(res, { task: taskPayload(task), tasks: taskStore.list().map(taskPayload) }, 201);
-  });
-
-  apiRoutes.set("POST /api/tasks/propose", async (req, res, _url) => {
     const body = await readBody(req);
     if (typeof body.text !== "string" || !body.text.trim()) throw new HttpError(400, "Task request is empty");
     const proposal = await createTaskProposal({
       text: body.text,
       source: "web",
       taskStore,
-      run: (input) => promptRunner.runText(input),
+      run: (input) => promptRunner.runEphemeral(input),
+      binding: sessionBinding(currentState()),
+      isolated: Boolean(body.isolated),
+      createIsolatedBinding: (input) => promptRunner.createTaskSessionBinding(input),
     });
-    sendJson(res, { ...proposal, task: proposal.task ? taskPayload(proposal.task) : null, tasks: taskStore.list().map(taskPayload) }, proposal.task ? 201 : 200);
+    const { state: _state, ...payload } = proposal;
+    sendJson(res, { ...payload, task: proposal.task ? taskPayload(proposal.task) : null, tasks: taskStore.list().map(taskPayload) }, proposal.task ? 201 : 200);
   });
 
   apiRoutes.set("PATCH /api/tasks", async (req, res, _url) => {
     const body = await readBody(req);
     if (typeof body.id !== "string") throw new HttpError(400, "Missing task id");
-    const patch = assertTaskInput(body, { partial: true });
+    const patch = taskPatchInput(body);
     if (body.status !== undefined) {
       if (!["enabled", "disabled"].includes(body.status)) throw new HttpError(400, "Invalid task status");
       patch.status = body.status;

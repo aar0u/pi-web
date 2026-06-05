@@ -336,14 +336,20 @@ function toggleAllResponses() {
   updateResponsesFoldToggle();
 }
 
-function addMessageAction(target, kind, label, iconName, onClick) {
-  if (!target || !onClick) return;
+function messageActions(target, kind) {
+  if (!target) return null;
   let actions = target.nextElementSibling?.matches?.(`.msg-actions.${kind}-actions`) ? target.nextElementSibling : null;
   if (!actions) {
     actions = document.createElement("div");
     actions.className = `msg-actions ${kind}-actions`;
     target.insertAdjacentElement("afterend", actions);
   }
+  return actions;
+}
+
+function addMessageAction(target, kind, label, iconName, onClick) {
+  if (!target || !onClick) return;
+  const actions = messageActions(target, kind);
   const button = document.createElement("button");
   button.className = "msg-action";
   button.type = "button";
@@ -356,6 +362,30 @@ function addMessageAction(target, kind, label, iconName, onClick) {
     onClick(ev);
   };
   actions.append(button);
+}
+
+function twoDigits(value) {
+  return String(value).padStart(2, "0");
+}
+
+function formatMessageTime(timestamp) {
+  if (!timestamp) return null;
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return null;
+  return `${twoDigits(date.getMonth() + 1)}-${twoDigits(date.getDate())} ${twoDigits(date.getHours())}:${twoDigits(date.getMinutes())}`;
+}
+
+function addMessageTime(target, kind, timestamp) {
+  const text = formatMessageTime(timestamp);
+  if (!text) return;
+  const actions = messageActions(target, kind);
+  const existing = actions.querySelector(".msg-time");
+  if (existing) existing.remove();
+  const time = document.createElement("span");
+  time.className = "msg-time";
+  time.textContent = text;
+  time.title = String(timestamp);
+  actions.append(time);
 }
 
 function debugContext() {
@@ -520,6 +550,7 @@ function addAssistantTurnFromParts(turn, opts = {}) {
   const forkEntry = ids[ids.length - 1];
   if (forkEntry) addMessageAction(el, "assistant", "Fork from here", "fork", () => doFork(forkEntry));
   addMessageAction(el, "assistant", "Inspect", null, () => showDebugInspector("Assistant response", { type: "assistant-turn", ids, turn }));
+  addMessageTime(el, "assistant", turn.timestamp);
   if (target === $("chat")) scrollChatToBottom();
   return { el, body };
 }
@@ -587,6 +618,7 @@ function addAssistantTurn(messages, opts = {}) {
   const forkEntry = [...messages].reverse().find((m) => m.id)?.id;
   if (forkEntry) addMessageAction(el, "assistant", "Fork from here", "fork", () => doFork(forkEntry));
   addMessageAction(el, "assistant", "Inspect", null, () => showDebugInspector("Assistant response", { type: "assistant-run", ids, messages }));
+  addMessageTime(el, "assistant", messages.find((m) => m.timestamp)?.timestamp);
   if (target === $("chat")) scrollChatToBottom();
   return { el, body };
 }
@@ -637,6 +669,7 @@ function addMessage(m, opts = {}) {
   if (m.role === "user" && m.id) addMessageAction(el, "user", "Edit from here", "navigate", () => doEditHere(m.id));
   if (m.role === "assistant" && m.id) addMessageAction(el, "assistant", "Fork from here", "fork", () => doFork(m.id));
   if (opts.inspect !== false) addMessageAction(el, m.role || "assistant", "Inspect", null, () => showDebugInspector("Message", { type: "message", message: m }));
+  addMessageTime(el, m.role || "assistant", m.timestamp);
   if (target === $("chat")) {
     updateResponsesFoldToggle();
     scrollChatToBottom();
@@ -919,8 +952,11 @@ async function renderTasksPanel() {
         button.onclick = async () => { await fn(); await renderTasksPanel(); };
         return button;
       };
-      actions.append(actionButton(task.status === "enabled" ? "Disable" : "Enable", () => patch({ status: task.status === "enabled" ? "disabled" : "enabled", confirmed: true })));
-      if (!task.confirmed) actions.append(actionButton("Confirm", () => patch({ confirmed: true, status: "enabled" })));
+      if (task.confirmed) {
+        actions.append(actionButton(task.status === "enabled" ? "Disable" : "Enable", () => patch({ status: task.status === "enabled" ? "disabled" : "enabled" })));
+      } else {
+        actions.append(actionButton("Confirm", () => patch({ confirmed: true, status: "enabled" })));
+      }
       actions.append(actionButton("Delete", () => api(`/api/tasks?id=${encodeURIComponent(task.id)}`, { method: "DELETE" })));
       row.append(head, promptText, meta, actions);
       root.append(row);
@@ -1134,13 +1170,20 @@ function scheduleRequestText(text) {
   return match?.[1]?.trim() || "";
 }
 
+function unsupportedSlashCommand(text) {
+  if (!text.startsWith("/")) return false;
+  const name = text.match(/^\/([^\s]+)/)?.[1]?.toLowerCase();
+  if (!name) return false;
+  return !state.slashCommands.some((command) => command.name.toLowerCase() === name);
+}
+
 async function sendScheduleRequest(text) {
   state.streaming = true;
   state.abortRequested = false;
   setStreamingUi(true);
   const token = setStatus("Asking pi to create a scheduled task…", "warning", { busy: true });
   try {
-    const result = await api("/api/tasks/propose", { method: "POST", body: JSON.stringify({ text }) });
+    const result = await api("/api/tasks", { method: "POST", body: JSON.stringify({ text }) });
     if (result.state) renderState(result.state, { preserveFolding: true });
     if (result.task) flashStatus("pi created a pending task. Confirm it in Tasks to enable.", "notice");
     else flashStatus(result.proposal?.question || "pi needs more information.", "warning");
@@ -1342,6 +1385,8 @@ $("promptForm").onsubmit = async (ev) => {
   $("prompt").value = "";
   const scheduleText = scheduleRequestText(text);
   if (scheduleText) await sendScheduleRequest(scheduleText);
+  else if (/^\/schedule\b/i.test(text)) flashStatus("Usage: /schedule <request>", "warning");
+  else if (unsupportedSlashCommand(text)) flashStatus("Unsupported command.", "warning");
   else await sendPrompt(text);
 };
 $("prompt").addEventListener("compositionstart", () => state.composing = true);

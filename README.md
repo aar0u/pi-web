@@ -26,21 +26,22 @@ Scheduled tasks use 5-field cron syntax and are persisted locally:
 - `data/tasks.json` — task definitions
 - `data/task-runs.jsonl` — execution summaries
 
-Create scheduled tasks from the Web chat with `/schedule <natural-language request>`, for example `/schedule 每天早上 9 点总结项目状态`. pi converts it into a pending cron task in the same conversation; confirm it in the `Tasks` panel to enable. The `Tasks` panel is only for managing tasks. Each task is pinned to the session that created the proposal, so scheduled runs do not land in whichever conversation happens to be open later. Scheduled prompts defer until pi is idle so they do not interrupt active Web prompts.
+Create scheduled tasks from the Web chat with `/schedule <natural-language request>`, for example `/schedule 每天早上 9 点总结项目状态`. pi converts it into a pending cron task in the same conversation; confirm it in the `Tasks` panel to enable. The `Tasks` panel is only for managing tasks. By default, Web-created tasks are pinned to the session where they were created, so scheduled runs do not land in whichever conversation happens to be open later. Scheduled prompts defer until pi is idle so they do not interrupt active Web prompts.
 
 ## Telegram bot
 
 Telegram support is optional. Enable it with:
 
 ```bash
-TELEGRAM_BOT_TOKEN=<bot-token> pnpm start
+TELEGRAM_BOT_TOKEN_BUZZ=<bot-token> pnpm start
 ```
 
-Set `TELEGRAM_CHAT_ID=<chat-id>` to restrict the bot to one chat.
+Set `TELEGRAM_CHAT_ID_BUZZ=<chat-id>` to restrict the bot to one chat. Telegram prompts use a dedicated fixed working directory, defaulting to the server startup cwd. Override it with `PI_HUB_TELEGRAM_CWD=/path/to/project`. The Telegram session is persisted in `data/telegram-session.json`, so Telegram messages do not follow whichever cwd/session the Web UI currently has open.
 
 Commands:
 
 ```text
+/new
 /schedule every 30 minutes summarize current project
 /tasks
 /confirm <task_id>
@@ -49,7 +50,7 @@ Commands:
 /delete <task_id>
 ```
 
-Web and Telegram task creation both start with natural language and ask pi to produce the cron-backed task proposal. Created tasks start disabled and require confirmation. Ordinary Telegram messages are queued when pi is busy and are sent as plain-text-friendly prompts.
+Web and Telegram task creation both start with natural language and ask pi to produce a cron-backed task. Created tasks start disabled and require confirmation. Telegram `/schedule` tasks use isolated task sessions by default, while ordinary Telegram chat can be reset with `/new`. Ordinary Telegram messages are queued when pi is busy and may use simple Telegram formatting when helpful.
 
 Remote access is disabled by default. For trusted LAN-only access, bind a non-loopback `HOST` with `PI_HUB_ALLOW_REMOTE=1`:
 

@@ -8,9 +8,18 @@ function summaryFromState(state) {
   return text.replace(/\s+/g, " ").trim().slice(0, 500);
 }
 
-export function startScheduler({ taskStore, runner, intervalMs = DEFAULT_INTERVAL_MS }) {
+export function startScheduler({ taskStore, runner, intervalMs = DEFAULT_INTERVAL_MS, notifyTelegram = null }) {
   let timer = null;
   let running = false;
+
+  async function notifyTaskTelegram(task, text) {
+    if (!notifyTelegram || !task.telegramChatId) return;
+    try {
+      await notifyTelegram(task.telegramChatId, text);
+    } catch (error) {
+      console.error("scheduled task telegram notification failed:", error instanceof Error ? error.message : error);
+    }
+  }
 
   async function runDueTask(task, now) {
     const runKey = minuteKey(now);
@@ -27,15 +36,18 @@ export function startScheduler({ taskStore, runner, intervalMs = DEFAULT_INTERVA
       });
       const finishedAt = new Date().toISOString();
       const summary = summaryFromState(result.state) || "Completed";
+      const notification = result.text || summary;
       const run = { taskId: task.id, source: "scheduler", status: "success", startedAt, finishedAt, summary, sessionFile: task.sessionFile, sessionId: task.sessionId };
       await taskStore.appendRun(run);
       await taskStore.update(task.id, { lastResult: run });
+      await notifyTaskTelegram(task, `Scheduled task ${task.id} completed.\n\n${notification}`);
     } catch (error) {
       const finishedAt = new Date().toISOString();
       const message = error instanceof Error ? error.message : String(error);
       const run = { taskId: task.id, source: "scheduler", status: "error", startedAt, finishedAt, error: message, sessionFile: task.sessionFile, sessionId: task.sessionId };
       await taskStore.appendRun(run);
       await taskStore.update(task.id, { lastResult: run, ...(task.sessionFile ? {} : { status: "disabled" }) });
+      await notifyTaskTelegram(task, `Scheduled task ${task.id} failed.\n\n${message}`);
     }
   }
 

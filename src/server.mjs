@@ -1,5 +1,7 @@
+import { promises as fs } from "node:fs";
 import { createServer } from "node:http";
-import { allowRemote, apiToken, host, isLoopbackHost, port, publicDir, schedulerIntervalMs, telegramBotToken, telegramChatId } from "./config.mjs";
+import { join, resolve } from "node:path";
+import { allowRemote, apiToken, host, isLoopbackHost, port, publicDir, schedulerIntervalMs, telegramBotToken, telegramChatId, telegramCwd as configuredTelegramCwd } from "./config.mjs";
 import { HttpError, readBody, sendError, sendJson, writeNdjson } from "./http.mjs";
 import { makeRuntime, SessionManager } from "./pi-runtime.mjs";
 import { registerFilesRoutes } from "./routes/files.mjs";
@@ -7,15 +9,18 @@ import { registerRuntimeRoutes } from "./routes/runtime.mjs";
 import { registerSessionsRoutes } from "./routes/sessions.mjs";
 import { registerTasksRoutes } from "./routes/tasks.mjs";
 import { startScheduler } from "./scheduler.mjs";
-import { TaskStore } from "./task-store.mjs";
+import { DATA_DIR, TaskStore } from "./task-store.mjs";
 import { startTelegramBot } from "./telegram-bot.mjs";
 import { sessionPayload } from "./session-state.mjs";
 import { serveStatic } from "./static.mjs";
 import { subscribePromptEvents } from "./stream-events.mjs";
 
 let cwd = process.cwd();
+const fixedTelegramCwd = resolve(configuredTelegramCwd || cwd);
+const TELEGRAM_SESSION_STATE = join(DATA_DIR, "telegram-session.json");
 let runtime = await makeRuntime(cwd, SessionManager.continueRecent(cwd));
 const taskStore = await TaskStore.open();
+let telegramRuntime = telegramBotToken ? await makeTelegramRuntime(fixedTelegramCwd) : null;
 let operationState = "idle";
 let activePrompt = null;
 let promptQueue = Promise.resolve();
@@ -28,9 +33,70 @@ function currentState() {
   return sessionPayload(runtime);
 }
 
-function summarizeState(state) {
+function lastMessageText(state) {
   const last = state?.messages?.[state.messages.length - 1];
-  return (last?.text || "").replace(/\s+/g, " ").trim().slice(0, 1500);
+  return (last?.text || "").trim();
+}
+
+function summarizeState(state) {
+  return lastMessageText(state).replace(/\s+/g, " ").trim().slice(0, 1500);
+}
+
+async function readTelegramSessionState() {
+  try {
+    return JSON.parse(await fs.readFile(TELEGRAM_SESSION_STATE, "utf8"));
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+async function writeTelegramSessionState(value) {
+  await fs.mkdir(DATA_DIR, { recursive: true });
+  await fs.writeFile(TELEGRAM_SESSION_STATE, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+async function createTelegramRuntime(telegramCwd) {
+  const nextRuntime = await makeRuntime(telegramCwd, SessionManager.create(telegramCwd));
+  await writeTelegramSessionState({ cwd: telegramCwd, sessionFile: nextRuntime.session.sessionFile, sessionId: nextRuntime.session.sessionId });
+  return nextRuntime;
+}
+
+async function makeTelegramRuntime(telegramCwd) {
+  const saved = await readTelegramSessionState();
+  if (saved?.cwd === telegramCwd && saved.sessionFile) {
+    try {
+      return await makeRuntime(telegramCwd, SessionManager.open(saved.sessionFile));
+    } catch (error) {
+      console.warn("Could not open saved Telegram session, creating a new one:", error instanceof Error ? error.message : error);
+    }
+  }
+  return createTelegramRuntime(telegramCwd);
+}
+
+async function resetTelegramSession() {
+  if (!telegramRuntime) throw new HttpError(503, "Telegram runtime is not enabled");
+  if (operationState !== "idle" || promptIsActive()) throw new HttpError(409, "Another session operation is in progress");
+  const oldRuntime = telegramRuntime;
+  telegramRuntime = await createTelegramRuntime(fixedTelegramCwd);
+  await oldRuntime.dispose().catch(() => {});
+  return { sessionFile: telegramRuntime.session.sessionFile, sessionId: telegramRuntime.session.sessionId };
+}
+
+async function createTaskSessionBinding({ source = "web" } = {}) {
+  const taskCwd = source === "telegram" ? fixedTelegramCwd : cwd;
+  const taskRuntime = await makeRuntime(taskCwd, SessionManager.create(taskCwd));
+  try {
+    const state = sessionPayload(taskRuntime);
+    return {
+      cwd: state?.cwd || null,
+      sessionFile: state?.sessionFile || null,
+      sessionId: state?.sessionId || null,
+      sessionName: state?.sessionName || null,
+    };
+  } finally {
+    await taskRuntime.dispose().catch(() => {});
+  }
 }
 
 function promptIsActive() {
@@ -73,7 +139,7 @@ async function withRuntimeMutation(fn) {
 }
 
 function beginPrompt() {
-  if (operationState === "mutation") throw new HttpError(409, "Another session operation is in progress");
+  if (operationState !== "idle") throw new HttpError(409, "Another session operation is in progress");
   if (promptIsActive()) throw new HttpError(409, "A response is already streaming");
   operationState = "prompt";
   const activeRuntime = runtime;
@@ -89,9 +155,44 @@ async function runPromptText({ text, source = "api", taskId = null, telegramChat
   try {
     await activeSession.prompt(text.trim());
     const state = sessionPayload(activeRuntime);
-    return { source, taskId, telegramChatId: chatId, startedAt, finishedAt: new Date().toISOString(), state, summary: summarizeState(state) };
+    return { source, taskId, telegramChatId: chatId, startedAt, finishedAt: new Date().toISOString(), state, text: lastMessageText(state), summary: summarizeState(state) };
   } finally {
     clearActivePrompt(activeSession);
+  }
+}
+
+async function runTelegramPromptText({ text, source = "telegram", telegramChatId: chatId = null }) {
+  if (!telegramRuntime) throw new HttpError(503, "Telegram runtime is not enabled");
+  if (typeof text !== "string" || !text.trim()) throw new HttpError(400, "Message is empty");
+  if (operationState !== "idle" || promptIsActive()) throw new HttpError(409, "Another session operation is in progress");
+
+  operationState = "prompt";
+  const startedAt = new Date().toISOString();
+  try {
+    await telegramRuntime.session.prompt(text.trim());
+    const state = sessionPayload(telegramRuntime);
+    return { source, telegramChatId: chatId, startedAt, finishedAt: new Date().toISOString(), state, text: lastMessageText(state), summary: summarizeState(state) };
+  } finally {
+    operationState = "idle";
+  }
+}
+
+async function runEphemeralPromptText({ text, source = "task-proposal", telegramChatId: chatId = null }) {
+  if (typeof text !== "string" || !text.trim()) throw new HttpError(400, "Message is empty");
+  if (operationState !== "idle" || promptIsActive()) throw new HttpError(409, "Another session operation is in progress");
+
+  operationState = "prompt";
+  const proposalCwd = source === "telegram" ? fixedTelegramCwd : cwd;
+  let proposalRuntime = null;
+  const startedAt = new Date().toISOString();
+  try {
+    proposalRuntime = await makeRuntime(proposalCwd, SessionManager.inMemory(proposalCwd));
+    await proposalRuntime.session.prompt(text.trim());
+    const state = sessionPayload(proposalRuntime);
+    return { source, telegramChatId: chatId, startedAt, finishedAt: new Date().toISOString(), state, text: lastMessageText(state), summary: summarizeState(state) };
+  } finally {
+    await proposalRuntime?.dispose().catch(() => {});
+    operationState = "idle";
   }
 }
 
@@ -117,7 +218,7 @@ async function runTaskPromptText({ text, task, source = "scheduler" }) {
     const startedAt = new Date().toISOString();
     await taskRuntime.session.prompt(text.trim());
     const state = sessionPayload(taskRuntime);
-    return { source, taskId: task.id, startedAt, finishedAt: new Date().toISOString(), state, summary: summarizeState(state) };
+    return { source, taskId: task.id, startedAt, finishedAt: new Date().toISOString(), state, text: lastMessageText(state), summary: summarizeState(state) };
   } finally {
     await taskRuntime?.dispose().catch(() => {});
     operationState = "idle";
@@ -133,10 +234,30 @@ const promptRunner = {
   isIdle: () => !promptIsActive() && operationState === "idle",
   runText: runPromptText,
   runTask: runTaskPromptText,
+  runTelegram: runTelegramPromptText,
+  runEphemeral: runEphemeralPromptText,
+  resetTelegram: resetTelegramSession,
+  createTaskSessionBinding,
   enqueue(input) {
     const run = promptQueue.then(async () => {
       await waitForIdle();
       return runPromptText(input);
+    });
+    promptQueue = run.catch(() => {});
+    return run;
+  },
+  enqueueTelegram(input) {
+    const run = promptQueue.then(async () => {
+      await waitForIdle();
+      return runTelegramPromptText(input);
+    });
+    promptQueue = run.catch(() => {});
+    return run;
+  },
+  enqueueEphemeral(input) {
+    const run = promptQueue.then(async () => {
+      await waitForIdle();
+      return runEphemeralPromptText(input);
     });
     promptQueue = run.catch(() => {});
     return run;
@@ -294,8 +415,13 @@ async function handleApi(req, res, url) {
   }
 }
 
-const scheduler = startScheduler({ taskStore, runner: promptRunner, intervalMs: schedulerIntervalMs });
 const telegramBot = startTelegramBot({ token: telegramBotToken, allowedChatId: telegramChatId, taskStore, runner: promptRunner });
+const scheduler = startScheduler({
+  taskStore,
+  runner: promptRunner,
+  intervalMs: schedulerIntervalMs,
+  notifyTelegram: telegramBot?.sendMessage,
+});
 
 const server = createServer((req, res) => {
   let url;
@@ -319,6 +445,7 @@ async function shutdown(signal) {
   server.close();
   scheduler.stop();
   telegramBot?.stop();
+  await telegramRuntime?.dispose().catch(() => {});
   await runtime.dispose().catch(() => {});
   process.exit(0);
 }
@@ -335,5 +462,6 @@ server.listen(port, host, () => {
   console.log(`loopback host: ${isLoopbackHost ? color("yes", colors.green) : color("no", colors.yellow)}`);
   console.log(`api token: ${apiToken ? color("enabled", colors.green) : "disabled"}`);
   console.log(`telegram bot: ${telegramBotToken ? color("enabled", colors.green) : "disabled"}`);
+  if (telegramBotToken) console.log(`telegram cwd: ${fixedTelegramCwd}`);
   console.log(`task persistence: data/tasks.json + data/task-runs.jsonl`);
 });
