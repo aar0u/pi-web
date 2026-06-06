@@ -102,7 +102,8 @@ main { position: relative; display: grid; grid-template-rows: auto minmax(0, 1fr
 .msg { max-width: min(760px, 82%); border: 1px solid #ded5c7; border-radius: 12px; background: var(--surface); box-shadow: 0 1px 2px #00000008; font-size: 13px; scroll-margin: 64px; }
 .msg.located { border-color: #9f7430; box-shadow: 0 0 0 3px #d9b56b55; }
 .msg.user { align-self: flex-end; background: #f7ead2; }
-.msg.assistant { align-self: flex-start; }
+.msg.assistant { align-self: flex-start; width: min(760px, 82%); }
+.msg.assistant.streaming-waiting { width: auto; min-width: 150px; }
 .msg.toolResult, .msg.bashExecution, .msg.custom { align-self: flex-start; max-width: min(900px, 90%); opacity: .86; }
 .msg-head { display: flex; gap: 6px; align-items: center; padding: 6px 8px; border-bottom: 1px solid #eee5d8; font-size: 11px; color: #766c60; user-select: none; }
 .msg.user .msg-head, .msg.assistant .msg-head, .msg.toolResult .msg-head, .msg.bashExecution .msg-head, .msg.custom .msg-head { cursor: pointer; }
@@ -198,6 +199,7 @@ main { position: relative; display: grid; grid-template-rows: auto minmax(0, 1fr
   .topbar { min-height: 38px; }
   .chat { padding: 10px; }
   .msg, .msg-actions, .turn-status { max-width: 100%; }
+  .msg.assistant { width: 100%; }
   .composer { grid-template-columns: 1fr 38px; }
   .composer-status { overflow-x: auto; padding-bottom: 1px; }
   .inspector-panel { top: 44px; left: 10px; right: 10px; width: auto; }

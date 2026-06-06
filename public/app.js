@@ -7,7 +7,7 @@ import { $, compactText, compactUserRequest, formatDuration, icon, setIcon } fro
 
 installApiTokenFromHash();
 
-const state = { data: null, streaming: false, composing: false, abortController: null, abortRequested: false, autoScroll: true, backendOffline: false, filePath: ".", cwdChoices: [], slashCommands: [], slashIndex: 0, inspector: null, status: { persistent: null, flash: null } };
+const state = { data: null, streaming: false, composing: false, abortController: null, abortRequested: false, autoScroll: true, backendOffline: false, filePath: ".", cwdChoices: [], slashCommands: [], slashIndex: 0, inspector: null, status: { persistent: null, flash: null }, detailFoldOverrides: new Map() };
 let loadFiles;
 let loadSessions;
 
@@ -193,20 +193,69 @@ function scrollChatToBottom(force = false) {
   if (force || state.autoScroll) $("chat").scrollTop = $("chat").scrollHeight;
 }
 
-function foldingState() {
-  const collapsed = new Set();
-  for (const el of $("chat").querySelectorAll(".msg.collapsed")) {
-    const key = el.dataset.ids || el.dataset.id;
-    if (key) collapsed.add(key);
-  }
-  return collapsed;
+function messageFoldKey(el) {
+  return el.dataset.ids || el.dataset.id || "";
 }
 
-function restoreFoldingState(collapsed) {
-  if (!collapsed) return;
+function turnBlockFoldKey(ids, index) {
+  return ids?.length ? `${ids.join(" ")}::${index}` : "";
+}
+
+// Folding defaults live here so the three render paths stay consistent:
+// - message: standalone/legacy chat entries such as toolResult or bashExecution.
+// - turn block: finalized assistant transcript blocks inside one response box.
+// - stream part: temporary frontend-only blocks while a response is streaming.
+// Live streaming tools are open until done so users can see active work; finalized tools are closed.
+function defaultMessageCollapsed(message) {
+  return message.role === "toolResult" || message.role === "bashExecution";
+}
+
+function defaultTurnBlockOpen() {
+  return false;
+}
+
+function defaultStreamPartOpen(part) {
+  return part.phase !== "done";
+}
+
+function setDetailsFoldState(el, key, defaultOpen, overrides = state.detailFoldOverrides) {
+  if (key) el.dataset.foldKey = key;
+  el.open = key && overrides?.has(key) ? overrides.get(key) : defaultOpen;
+}
+
+function rememberDetailsFoldState(el, key, overrides = state.detailFoldOverrides) {
+  if (key && overrides) overrides.set(key, el.open);
+}
+
+function trackDetailsFoldState(summary, details, key, overrides) {
+  const remember = () => requestAnimationFrame(() => rememberDetailsFoldState(details, key, overrides));
+  summary.addEventListener("click", (ev) => {
+    if (!(ev.target instanceof Element && ev.target.closest("button"))) remember();
+  });
+  summary.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter" || ev.key === " ") remember();
+  });
+}
+
+function foldingState() {
+  const messages = new Map();
+  const details = new Map(state.detailFoldOverrides);
   for (const el of $("chat").querySelectorAll(".msg")) {
-    const key = el.dataset.ids || el.dataset.id;
-    if (key && collapsed.has(key)) setMessageCollapsed(el, true);
+    const key = messageFoldKey(el);
+    if (key) messages.set(key, el.classList.contains("collapsed"));
+  }
+  return { messages, details };
+}
+
+function restoreFoldingState(folding) {
+  if (!folding) return;
+  for (const el of $("chat").querySelectorAll(".msg")) {
+    const key = messageFoldKey(el);
+    if (key && folding.messages.has(key)) setMessageCollapsed(el, folding.messages.get(key));
+  }
+  state.detailFoldOverrides = new Map(folding.details);
+  for (const el of $("chat").querySelectorAll("details[data-fold-key]")) {
+    setDetailsFoldState(el, el.dataset.foldKey, el.open, folding.details);
   }
 }
 
@@ -215,6 +264,7 @@ function renderState(data, opts = {}) {
   const prevScrollTop = chat.scrollTop;
   const prevScrollHeight = chat.scrollHeight;
   const collapsed = opts.preserveFolding ? foldingState() : null;
+  if (!opts.preserveFolding) state.detailFoldOverrides = new Map();
   updateChrome(data);
   chat.innerHTML = "";
   if (data.turns) renderChatTurns(data.turns, chat);
@@ -508,7 +558,7 @@ function renderUserRequest(body, text) {
   if (compact.visibleText) renderMarkdown(compact.visibleText, body);
 }
 
-function renderTurnBlock(block, body, ids) {
+function renderTurnBlock(block, body, ids, index) {
   if (block.type === "text") {
     if (!block.text) return;
     const section = document.createElement("div");
@@ -520,7 +570,10 @@ function renderTurnBlock(block, body, ids) {
 
   const tool = document.createElement("details");
   tool.className = `${block.type === "thinking" ? "turn-thinking" : "turn-tool"} ${block.error ? "error" : ""}`;
+  const foldKey = turnBlockFoldKey(ids, index);
+  setDetailsFoldState(tool, foldKey, defaultTurnBlockOpen(block));
   const summary = document.createElement("summary");
+  trackDetailsFoldState(summary, tool, foldKey);
   const label = block.type === "thinking" ? "thinking" : (block.name || "tool");
   appendToolSummary(summary, label, blockCommandText(block), block.name || block.type);
   addToolInspect(summary, `${block.type === "thinking" ? "Thinking" : "Tool"}: ${label}`, { type: block.type, ids, block });
@@ -569,7 +622,7 @@ function addAssistantTurnFromBlocks(turn, opts = {}) {
 
   const body = document.createElement("div");
   body.className = "msg-body turn-body";
-  for (const block of blocks) renderTurnBlock(block, body, ids);
+  blocks.forEach((block, index) => renderTurnBlock(block, body, ids, index));
   if (!body.childElementCount) body.textContent = "";
 
   el.append(head, body);
@@ -613,7 +666,7 @@ function addAssistantTurn(messages, opts = {}) {
 
   const body = document.createElement("div");
   body.className = "msg-body turn-body";
-  for (const block of legacyTurnBlocks(messages)) renderTurnBlock(block, body, ids);
+  legacyTurnBlocks(messages).forEach((block, index) => renderTurnBlock(block, body, ids, index));
 
   el.append(head, body);
   target.append(el);
@@ -644,7 +697,7 @@ function addMessage(m, opts = {}) {
   spacer.className = "spacer";
   head.append(role, summaryText, spacer);
   if (canCollapse(m)) {
-    const defaultCollapsed = m.role === "toolResult";
+    const defaultCollapsed = defaultMessageCollapsed(m);
     if (defaultCollapsed) el.classList.add("collapsed");
     const indicator = document.createElement("span");
     indicator.className = "collapse-indicator";
@@ -1214,12 +1267,14 @@ async function sendPrompt(text) {
   addMessage({ role: "user", text });
   const startTime = Date.now();
   const assistant = addMessage({ role: "assistant", text: waitingText(startTime) }, { inspect: false });
+  assistant.el.classList.add("streaming-waiting");
   addMessageAction(assistant.el, "assistant", "Inspect stream", null, () => showDebugInspector("Streaming response", { type: "streaming-response", output, streamParts }));
   assistant.body.classList.add("turn-body");
   const controller = new AbortController();
   state.abortController = controller;
   let output = "";
   const streamParts = [];
+  const streamDetails = new Map();
   let activeToolPart = null;
   let gotVisibleResponse = false;
   let streamWarningShown = false;
@@ -1277,7 +1332,7 @@ async function sendPrompt(text) {
   };
   const renderAssistant = () => {
     assistant.body.textContent = "";
-    for (const part of streamParts) {
+    for (const [index, part] of streamParts.entries()) {
       if (part.type === "text") {
         const visibleText = splitAssistantParts(part.text)
           .filter((p) => p.type === "text")
@@ -1293,8 +1348,10 @@ async function sendPrompt(text) {
 
       const tool = document.createElement("details");
       tool.className = `${part.type === "thinking" ? "turn-thinking" : "turn-tool"} ${part.error ? "error" : ""}`;
-      tool.open = part.phase !== "done";
+      const foldKey = `stream:${index}`;
+      setDetailsFoldState(tool, foldKey, defaultStreamPartOpen(part), streamDetails);
       const summary = document.createElement("summary");
+      trackDetailsFoldState(summary, tool, foldKey, streamDetails);
       let phaseText = "queued";
       if (part.phase === "done") phaseText = formatDuration((part.endedAt || Date.now()) - (part.startedAt || part.createdAt));
       else if (part.phase === "running") phaseText = `running ${formatDuration(Date.now() - (part.startedAt || part.createdAt))}`;
@@ -1317,6 +1374,7 @@ async function sendPrompt(text) {
   };
   const markVisible = () => {
     gotVisibleResponse = true;
+    assistant.el.classList.remove("streaming-waiting");
   };
   try {
     const res = await fetch("/api/prompt", {
