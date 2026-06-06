@@ -45,7 +45,7 @@ function subscribePromptEventSink(session, { write = null, getState = null, onEv
         write?.({ type: "tool", phase: "running", toolName: event.toolName, message: toolMessage("running", event.toolName, event.args) });
         return;
       case "tool_execution_update":
-        write?.({ type: "tool", phase: "update", toolName: event.toolName, message: toolMessage("update", event.toolName, textOfContent(event.partialResult?.content)) });
+        write?.({ type: "tool", phase: "update", toolName: event.toolName, message: textOfContent(event.partialResult?.content) });
         return;
       case "tool_execution_end":
         write?.({
@@ -83,7 +83,6 @@ function writeAssistantUpdate(write, update, onEvent = null) {
     return;
   }
   if (update?.type === "toolcall_start") {
-    write?.({ type: "tool", phase: "queued", message: "… preparing tool call" });
     return;
   }
   if (update?.type === "toolcall_end" && update.toolCall) {

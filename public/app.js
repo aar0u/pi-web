@@ -231,8 +231,8 @@ function renderState(data, opts = {}) {
 
 function renderChatTurns(turns, container) {
   for (const turn of turns) {
-    if (turn.role === "user") addMessage(turn.message, { container });
-    else addAssistantTurnFromParts(turn, { container });
+    if (turn.role === "assistant") addAssistantTurnFromBlocks(turn, { container });
+    else addMessage(turn.message, { container });
   }
 }
 
@@ -285,9 +285,20 @@ function toolPreview(command, name) {
     .trim();
 }
 
-function toolCommandText(part) {
-  if (part?.name === "thinking") return part.call || thinkingPreview(part.results?.join("\n\n")) || "thinking";
-  return part?.call || part?.name || "tool";
+function blockCommandText(block) {
+  if (block?.type === "thinking") return thinkingPreview(block.text) || "thinking";
+  return block?.call || block?.name || "tool";
+}
+
+function blockResultText(block) {
+  if (block?.type === "thinking") return block.text || "";
+  return block?.results?.length ? block.results.join("\n\n") : "(no output)";
+}
+
+function blockSummaryText(block) {
+  if (block.type === "text") return block.text;
+  if (block.type === "thinking") return "thinking";
+  return `tool: ${block.name || "tool"}`;
 }
 
 function appendToolSummary(summary, label, command, name) {
@@ -301,28 +312,28 @@ function appendToolSummary(summary, label, command, name) {
   summary.append(title, preview);
 }
 
-function turnParts(messages) {
-  const parts = [];
+function legacyTurnBlocks(messages) {
+  const blocks = [];
   const pendingTools = [];
   for (const m of messages) {
     const text = messageText(m);
     if (m.role === "assistant") {
       const detail = messageErrorDetail(m);
-      for (const part of splitAssistantParts(text)) {
-        part.error = part.error || Boolean(detail);
-        parts.push(part);
-        if (part.type === "tool") pendingTools.push(part);
+      for (const block of splitAssistantParts(text)) {
+        block.error = block.error || Boolean(detail);
+        blocks.push(block);
+        if (block.type === "tool") pendingTools.push(block);
       }
       continue;
     }
 
-    const part = pendingTools.shift() || { type: "tool", name: m.toolName || m.role || "tool", call: "", results: [], error: false };
-    if (!parts.includes(part)) parts.push(part);
-    part.name = m.toolName || part.name;
-    part.error = part.error || Boolean(messageErrorDetail(m));
-    part.results.push(text || m.error || "(no output)");
+    const block = pendingTools.shift() || { type: "tool", name: m.toolName || m.role || "tool", call: "", results: [], error: false };
+    if (!blocks.includes(block)) blocks.push(block);
+    block.name = m.toolName || block.name;
+    block.error = block.error || Boolean(messageErrorDetail(m));
+    block.results.push(text || m.error || "(no output)");
   }
-  return parts;
+  return blocks;
 }
 
 function setMessageCollapsed(el, collapsed) {
@@ -497,7 +508,36 @@ function renderUserRequest(body, text) {
   if (compact.visibleText) renderMarkdown(compact.visibleText, body);
 }
 
-function addAssistantTurnFromParts(turn, opts = {}) {
+function renderTurnBlock(block, body, ids) {
+  if (block.type === "text") {
+    if (!block.text) return;
+    const section = document.createElement("div");
+    section.className = "turn-text";
+    renderMarkdown(block.text, section);
+    body.append(section);
+    return;
+  }
+
+  const tool = document.createElement("details");
+  tool.className = `${block.type === "thinking" ? "turn-thinking" : "turn-tool"} ${block.error ? "error" : ""}`;
+  const summary = document.createElement("summary");
+  const label = block.type === "thinking" ? "thinking" : (block.name || "tool");
+  appendToolSummary(summary, label, blockCommandText(block), block.name || block.type);
+  addToolInspect(summary, `${block.type === "thinking" ? "Thinking" : "Tool"}: ${label}`, { type: block.type, ids, block });
+  const content = document.createElement("div");
+  content.className = "turn-tool-body";
+  const command = document.createElement("div");
+  command.className = "turn-tool-command";
+  command.textContent = blockCommandText(block);
+  const result = document.createElement("div");
+  result.className = "turn-tool-result";
+  result.textContent = blockResultText(block);
+  content.append(command, result);
+  tool.append(summary, content);
+  body.append(tool);
+}
+
+function addAssistantTurnFromBlocks(turn, opts = {}) {
   const target = opts.container || $("chat");
   const el = document.createElement("article");
   el.className = `msg assistant turn ${turn.error ? "error" : ""}`;
@@ -513,7 +553,8 @@ function addAssistantTurnFromParts(turn, opts = {}) {
   const summaryText = document.createElement("span");
   const detail = turn.errorDetail || turn.detail || "";
   summaryText.className = detail ? "msg-detail" : "msg-summary";
-  summaryText.textContent = detail ? compactText(detail) : compactText((turn.parts || []).map((part) => part.type === "text" ? part.text : `tool: ${part.name}`).join(" "));
+  const blocks = turn.blocks || turn.parts || [];
+  summaryText.textContent = detail ? compactText(detail) : compactText(blocks.map(blockSummaryText).join(" "));
   const spacer = document.createElement("span");
   spacer.className = "spacer";
   const indicator = document.createElement("span");
@@ -528,33 +569,7 @@ function addAssistantTurnFromParts(turn, opts = {}) {
 
   const body = document.createElement("div");
   body.className = "msg-body turn-body";
-  for (const part of turn.parts || []) {
-    if (part.type === "text") {
-      if (!part.text) continue;
-      const section = document.createElement("div");
-      section.className = "turn-text";
-      renderMarkdown(part.text, section);
-      body.append(section);
-      continue;
-    }
-
-    const tool = document.createElement("details");
-    tool.className = `turn-tool ${part.error ? "error" : ""}`;
-    const summary = document.createElement("summary");
-    appendToolSummary(summary, part.name || "tool", toolCommandText(part), part.name);
-    addToolInspect(summary, `Tool: ${part.name || "tool"}`, { type: "tool", ids, part });
-    const content = document.createElement("div");
-    content.className = "turn-tool-body";
-    const command = document.createElement("div");
-    command.className = "turn-tool-command";
-    command.textContent = toolCommandText(part);
-    const result = document.createElement("div");
-    result.className = "turn-tool-result";
-    result.textContent = part.results?.length ? part.results.join("\n\n") : "(no output)";
-    content.append(command, result);
-    tool.append(summary, content);
-    body.append(tool);
-  }
+  for (const block of blocks) renderTurnBlock(block, body, ids);
   if (!body.childElementCount) body.textContent = "";
 
   el.append(head, body);
@@ -598,32 +613,7 @@ function addAssistantTurn(messages, opts = {}) {
 
   const body = document.createElement("div");
   body.className = "msg-body turn-body";
-  for (const part of turnParts(messages)) {
-    if (part.type === "text") {
-      const section = document.createElement("div");
-      section.className = "turn-text";
-      renderMarkdown(part.text, section);
-      body.append(section);
-      continue;
-    }
-
-    const tool = document.createElement("details");
-    tool.className = `turn-tool ${part.error ? "error" : ""}`;
-    const summary = document.createElement("summary");
-    appendToolSummary(summary, part.name, toolCommandText(part), part.name);
-    addToolInspect(summary, `Tool: ${part.name || "tool"}`, { type: "tool", ids, part });
-    const content = document.createElement("div");
-    content.className = "turn-tool-body";
-    const command = document.createElement("div");
-    command.className = "turn-tool-command";
-    command.textContent = toolCommandText(part);
-    const result = document.createElement("div");
-    result.className = "turn-tool-result";
-    result.textContent = part.results.length ? part.results.join("\n\n") : "(no output)";
-    content.append(command, result);
-    tool.append(summary, content);
-    body.append(tool);
-  }
+  for (const block of legacyTurnBlocks(messages)) renderTurnBlock(block, body, ids);
 
   el.append(head, body);
   target.append(el);
@@ -643,7 +633,8 @@ function addMessage(m, opts = {}) {
   const head = document.createElement("div");
   head.className = "msg-head";
   const role = document.createElement("span");
-  role.textContent = m.toolName ? `${m.role || "tool"}: ${m.toolName}` : (m.role || "assistant");
+  const roleLabel = m.role === "bashExecution" ? "shell" : (m.role || "assistant");
+  role.textContent = m.toolName ? `${roleLabel}: ${m.toolName}` : roleLabel;
   const summaryText = document.createElement("span");
   const detail = messageErrorDetail(m);
   const userRequest = m.role === "user" ? compactUserRequest(messageText(m), state.slashCommands) : null;
@@ -1250,7 +1241,7 @@ async function sendPrompt(text) {
     }
   }, 500);
   const appendTextDelta = (delta) => {
-    if (activeToolPart?.name === "thinking" && activeToolPart.phase !== "done") {
+    if (activeToolPart?.type === "thinking" && activeToolPart.phase !== "done") {
       activeToolPart.phase = "done";
       activeToolPart.endedAt = Date.now();
       activeToolPart = null;
@@ -1264,20 +1255,24 @@ async function sendPrompt(text) {
     part.text += delta;
   };
   const appendToolEvent = (evt) => {
+    if (evt.phase === "queued" && !evt.toolName) return;
     const name = evt.toolName || activeToolPart?.name || "tool";
-    if (!activeToolPart || activeToolPart.phase === "done" || (evt.toolName && activeToolPart.name !== evt.toolName)) {
-      activeToolPart = { type: "tool", name, phase: evt.phase || "running", createdAt: Date.now(), startedAt: null, endedAt: null, command: "", messages: [], error: false };
+    const blockType = name === "thinking" ? "thinking" : "tool";
+    if (!activeToolPart || activeToolPart.phase === "done" || activeToolPart.type !== blockType || (evt.toolName && activeToolPart.name !== evt.toolName)) {
+      activeToolPart = { type: blockType, name, phase: evt.phase || "running", createdAt: Date.now(), startedAt: null, endedAt: null, command: "", messages: [], error: false };
       streamParts.push(activeToolPart);
     }
     activeToolPart.name = name;
-    activeToolPart.phase = evt.phase === "update" ? (activeToolPart.phase === "done" ? "done" : "running") : (evt.phase || activeToolPart.phase || "running");
+    if (evt.phase !== "update") activeToolPart.phase = evt.phase || activeToolPart.phase || "running";
+    if (["queued", "running"].includes(activeToolPart.phase) && evt.phase === "update") activeToolPart.phase = "running";
     if (activeToolPart.phase === "running" && !activeToolPart.startedAt) activeToolPart.startedAt = Date.now();
     if (activeToolPart.phase === "done" && !activeToolPart.endedAt) activeToolPart.endedAt = Date.now();
     activeToolPart.error = Boolean(evt.isError || activeToolPart.error);
     if (evt.message) {
       if (evt.phase === "queued" || evt.phase === "running") activeToolPart.command = evt.message;
+      else if (activeToolPart.type === "thinking") activeToolPart.messages[0] = `${activeToolPart.messages[0] || ""}${evt.message}`;
       else activeToolPart.messages.push(evt.message);
-      if (activeToolPart.name === "thinking") activeToolPart.command = thinkingPreview(activeToolPart.messages.join("")) || activeToolPart.command;
+      if (activeToolPart.type === "thinking") activeToolPart.command = thinkingPreview(activeToolPart.messages[0] || "") || activeToolPart.command;
     }
   };
   const renderAssistant = () => {
@@ -1297,19 +1292,20 @@ async function sendPrompt(text) {
       }
 
       const tool = document.createElement("details");
-      tool.className = `turn-tool ${part.error ? "error" : ""}`;
+      tool.className = `${part.type === "thinking" ? "turn-thinking" : "turn-tool"} ${part.error ? "error" : ""}`;
       tool.open = part.phase !== "done";
       const summary = document.createElement("summary");
       let phaseText = "queued";
       if (part.phase === "done") phaseText = formatDuration((part.endedAt || Date.now()) - (part.startedAt || part.createdAt));
       else if (part.phase === "running") phaseText = `running ${formatDuration(Date.now() - (part.startedAt || part.createdAt))}`;
-      appendToolSummary(summary, `${part.name || "tool"} · ${phaseText}`, part.command, part.name);
-      addToolInspect(summary, `Tool: ${part.name || "tool"}`, { type: "streaming-tool", part });
+      const label = part.type === "thinking" ? "thinking" : (part.name || "tool");
+      appendToolSummary(summary, `${label} · ${phaseText}`, part.command, part.name);
+      addToolInspect(summary, `${part.type === "thinking" ? "Thinking" : "Tool"}: ${label}`, { type: `streaming-${part.type}`, part });
       const content = document.createElement("div");
       content.className = "turn-tool-body";
       const command = document.createElement("div");
       command.className = "turn-tool-command";
-      command.textContent = part.name === "thinking" ? (part.command || thinkingPreview(part.messages.join("")) || "thinking") : (part.command || part.name || "tool");
+      command.textContent = part.type === "thinking" ? (part.command || thinkingPreview(part.messages.join("")) || "thinking") : (part.command || part.name || "tool");
       const result = document.createElement("div");
       result.className = "turn-tool-result";
       result.textContent = part.messages.length ? part.messages.join("\n\n") : (part.phase === "done" ? "(no output)" : "running…");
@@ -1353,9 +1349,17 @@ async function sendPrompt(text) {
           state.data = evt.state;
         }
       }
-      if ((evt.type === "done" || evt.type === "state") && evt.state) {
-        latestPromptState = evt.state;
-        state.data = evt.state;
+      if (evt.type === "done" || evt.type === "state") {
+        if (activeToolPart && activeToolPart.phase !== "done") {
+          activeToolPart.phase = "done";
+          activeToolPart.endedAt = Date.now();
+          activeToolPart = null;
+          renderAssistant();
+        }
+        if (evt.state) {
+          latestPromptState = evt.state;
+          state.data = evt.state;
+        }
       }
       scrollChatToBottom();
     });

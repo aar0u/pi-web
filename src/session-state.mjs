@@ -12,6 +12,32 @@ function toolPartText(part) {
   return details ? `[tool: ${part.name}] ${details}` : `[tool: ${part.name}]`;
 }
 
+function bashExecutionText(message) {
+  let text = `Ran \`${message.command || "bash"}\`\n`;
+  text += message.output ? `\`\`\`\n${message.output}\n\`\`\`` : "(no output)";
+  if (message.cancelled) text += "\n\n(command cancelled)";
+  else if (message.exitCode !== null && message.exitCode !== undefined && message.exitCode !== 0) text += `\n\nCommand exited with code ${message.exitCode}`;
+  if (message.truncated && message.fullOutputPath) text += `\n\n[Output truncated. Full output: ${message.fullOutputPath}]`;
+  return text;
+}
+
+function messageText(message = {}) {
+  if (message.role === "bashExecution") return bashExecutionText(message);
+  if (typeof message.display === "string" && message.display) return message.display;
+  if (typeof message.content === "string") return message.content;
+  return textOfContent(message.content);
+}
+
+function isToolPart(part) {
+  return part && typeof part === "object" && typeof part.name === "string";
+}
+
+function isThinkingPart(part) {
+  if (!part || typeof part !== "object") return false;
+  if (isToolPart(part)) return false;
+  return (part.type === "thinking" || !("type" in part)) && typeof part.thinking === "string" && Boolean(part.thinking);
+}
+
 export function textOfContent(content) {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
@@ -58,21 +84,25 @@ function treeItems(roots, activeLeafId, activeIds) {
   return roots.map(itemOf);
 }
 
-function contentParts(content) {
+function contentBlocks(content) {
   if (typeof content === "string") return content ? [{ type: "text", text: content }] : [];
   if (!Array.isArray(content)) return [];
 
-  const parts = [];
+  const blocks = [];
   for (const part of content) {
     if (!part || typeof part !== "object") continue;
-    if (typeof part.text === "string" && part.text) parts.push({ type: "text", text: part.text });
-    else if (typeof part.thinking === "string" && part.thinking) parts.push({ type: "tool", name: "thinking", call: "", results: [part.thinking], error: false });
-    else if (typeof part.name === "string") {
-      const details = shortJson(part.input ?? part.arguments ?? part.args);
-      parts.push({ type: "tool", name: part.name, call: details, results: [], error: false });
+    if (typeof part.text === "string" && part.text) {
+      blocks.push({ type: "text", text: part.text });
+      continue;
     }
+    if (isToolPart(part)) {
+      const input = part.input ?? part.arguments ?? part.args;
+      blocks.push({ type: "tool", name: part.name, input, call: shortJson(input), results: [], error: false });
+      continue;
+    }
+    if (isThinkingPart(part)) blocks.push({ type: "thinking", text: part.thinking, error: false });
   }
-  return parts;
+  return blocks;
 }
 
 function problemStopReason(reason) {
@@ -89,7 +119,7 @@ function chatTurns(entries, toMessage) {
   const pendingTools = [];
   const ensureAssistant = () => {
     if (!assistant) {
-      assistant = { role: "assistant", ids: [], timestamp: null, parts: [], error: false, errorDetail: "" };
+      assistant = { role: "assistant", ids: [], timestamp: null, blocks: [], error: false, errorDetail: "" };
       turns.push(assistant);
     }
     return assistant;
@@ -97,10 +127,10 @@ function chatTurns(entries, toMessage) {
 
   for (const entry of entries) {
     const message = entry.message;
-    if (message.role === "user") {
+    if (["user", "bashExecution", "custom"].includes(message.role)) {
       assistant = null;
       pendingTools.length = 0;
-      turns.push({ role: "user", message: toMessage(entry) });
+      turns.push({ role: message.role, message: toMessage(entry) });
       continue;
     }
 
@@ -116,25 +146,25 @@ function chatTurns(entries, toMessage) {
       const detail = messageErrorDetail(message);
       turn.error = turn.error || Boolean(detail);
       if (detail && !turn.errorDetail) turn.errorDetail = detail;
-      for (const part of contentParts(message.content)) {
-        part.error = part.error || Boolean(detail);
-        turn.parts.push(part);
-        if (part.type === "tool") pendingTools.push(part);
+      for (const block of contentBlocks(message.content)) {
+        block.error = block.error || Boolean(detail);
+        turn.blocks.push(block);
+        if (block.type === "tool") pendingTools.push(block);
       }
-      if (message.errorMessage && !turn.parts.length) turn.parts.push({ type: "text", text: message.errorMessage });
+      if (message.errorMessage && !turn.blocks.length) turn.blocks.push({ type: "text", text: message.errorMessage });
       continue;
     }
 
-    const part = pendingTools.shift() || { type: "tool", name: message.toolName || message.role || "tool", call: "", results: [], error: false };
-    if (!turn.parts.includes(part)) turn.parts.push(part);
-    part.name = message.toolName || part.name;
+    const block = pendingTools.shift() || { type: "tool", name: message.toolName || message.role || "tool", call: "", results: [], error: false };
+    if (!turn.blocks.includes(block)) turn.blocks.push(block);
+    block.name = message.toolName || block.name;
     const detail = messageErrorDetail(message);
-    part.error = part.error || Boolean(detail);
-    part.results.push(textOfContent(message.content) || message.errorMessage || "(no output)");
+    block.error = block.error || Boolean(detail);
+    block.results.push(textOfContent(message.content) || message.errorMessage || "(no output)");
   }
 
   for (const turn of turns) {
-    if (turn.role === "assistant" && !turn.parts.length) turn.parts.push({ type: "text", text: "" });
+    if (turn.role === "assistant" && !turn.blocks.length) turn.blocks.push({ type: "text", text: "" });
   }
   return turns;
 }
@@ -151,7 +181,7 @@ export function sessionPayload(runtime) {
     parentId: entry.parentId,
     timestamp: entry.timestamp,
     role: entry.message?.role ?? "assistant",
-    text: textOfContent(entry.message?.content),
+    text: messageText(entry.message),
     error: entry.message?.errorMessage,
     errorDetail: messageErrorDetail(entry.message ?? {}),
     stopReason: entry.message?.stopReason,
