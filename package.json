@@ -4,9 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "node --watch src/server.mjs",
+    "dev": "node --env-file-if-exists=.env --watch src/server.mjs",
     "build": "node scripts/check-syntax.mjs && pnpm vendor:check && node scripts/check-markdown-safety.mjs",
-    "start": "node src/server.mjs",
+    "start": "node --env-file-if-exists=.env src/server.mjs",
     "vendor:update": "node scripts/update-vendor.mjs",
     "vendor:check": "node scripts/check-vendor.mjs"
   },

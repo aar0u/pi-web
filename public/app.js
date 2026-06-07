@@ -224,11 +224,15 @@ function defaultStreamPartOpen(part) {
   return normalizeStreamPhase(part.phase) !== "done";
 }
 
+function activityText(label, startedAt = Date.now()) {
+  const dots = ".".repeat((Math.floor((Date.now() - startedAt) / 500) % 3) + 1);
+  return `${label} ${dots}`;
+}
+
 function streamPhaseText(part) {
   const phase = normalizeStreamPhase(part.phase);
   if (phase === "done") return formatDuration((part.endedAt || Date.now()) - (part.startedAt || part.createdAt));
-  if (phase === "running") return `running ${formatDuration(Date.now() - (part.startedAt || part.createdAt))}`;
-  return "queued";
+  return activityText(phase, part.startedAt || part.createdAt);
 }
 
 function setDetailsFoldState(el, key, defaultOpen, overrides = state.detailFoldOverrides) {
@@ -1267,11 +1271,6 @@ async function sendScheduleRequest(text) {
   }
 }
 
-function waitingText(startedAt = Date.now()) {
-  const dots = ".".repeat((Math.floor((Date.now() - startedAt) / 500) % 3) + 1);
-  return `waiting ${dots}`;
-}
-
 async function sendPrompt(text) {
   state.streaming = true;
   state.abortRequested = false;
@@ -1279,7 +1278,7 @@ async function sendPrompt(text) {
   setStreamingUi(true);
   addMessage({ role: "user", text });
   const startTime = Date.now();
-  const assistant = addMessage({ role: "assistant", text: waitingText(startTime) }, { inspect: false });
+  const assistant = addMessage({ role: "assistant", text: activityText("waiting", startTime) }, { inspect: false });
   assistant.el.classList.add("streaming-waiting");
   addMessageAction(assistant.el, "assistant", "Inspect stream", null, () => showDebugInspector("Streaming response", { type: "streaming-response", output, streamParts }));
   assistant.body.classList.add("turn-body");
@@ -1289,6 +1288,7 @@ async function sendPrompt(text) {
   const streamParts = [];
   const streamDetails = new Map();
   const streamToolParts = new Map();
+  let nextStreamPartId = 0;
   let activeToolPart = null;
   let gotVisibleResponse = false;
   let streamWarningShown = false;
@@ -1297,7 +1297,7 @@ async function sendPrompt(text) {
   const progressInterval = setInterval(() => {
     const idleMs = Date.now() - lastStreamEventAt;
     if (!gotVisibleResponse) {
-      assistant.body.textContent = waitingText(startTime);
+      assistant.body.textContent = activityText("waiting", startTime);
       if (idleMs > STREAM_AWARENESS_TIMEOUT_MS && !streamWarningShown) {
         streamWarningShown = true;
         setStatus("No visible response yet; still waiting.", "warning");
@@ -1327,8 +1327,10 @@ async function sendPrompt(text) {
   };
   const streamToolKey = (evt, name, blockType) => {
     if (evt.toolCallId) return `tool:${evt.toolCallId}`;
-    if (blockType === "thinking") return `thinking:${evt.contentIndex ?? "active"}`;
-    return activeToolPart?.type === blockType && activeToolPart.phase !== "done" ? activeToolPart.key : `tool:${name}`;
+    if (evt.contentIndex !== undefined && evt.contentIndex !== null) return `${blockType}:${evt.contentIndex}`;
+    if (activeToolPart?.type === blockType && activeToolPart.phase !== "done" && (blockType === "thinking" || activeToolPart.name === name)) return activeToolPart.key;
+    nextStreamPartId += 1;
+    return `${blockType}:${name}:${nextStreamPartId}`;
   };
   const appendToolEvent = (evt) => {
     if (evt.phase === "queued" && !evt.toolName) return;
@@ -1337,7 +1339,7 @@ async function sendPrompt(text) {
     if (activeToolPart?.type === "thinking" && blockType !== "thinking") finishStreamPart(activeToolPart);
     const key = streamToolKey(evt, name, blockType);
     let part = streamToolParts.get(key);
-    if (!part || (part.phase === "done" && !evt.toolCallId)) {
+    if (!part) {
       part = { key, type: blockType, name, phase: normalizeStreamPhase(evt.phase), createdAt: Date.now(), startedAt: null, endedAt: null, command: "", messages: [], error: false };
       streamToolParts.set(key, part);
       streamParts.push(part);
@@ -1387,10 +1389,13 @@ async function sendPrompt(text) {
       const command = document.createElement("div");
       command.className = "turn-tool-command";
       command.textContent = part.type === "thinking" ? (part.command || thinkingPreview(part.messages.join("")) || "thinking") : (part.command || part.name || "tool");
-      const result = document.createElement("div");
-      result.className = "turn-tool-result";
-      result.textContent = part.messages.length ? part.messages.join("\n\n") : (part.phase === "done" ? "(no output)" : "running…");
-      content.append(command, result);
+      content.append(command);
+      if (part.messages.length || part.phase === "done") {
+        const result = document.createElement("div");
+        result.className = "turn-tool-result";
+        result.textContent = part.messages.length ? part.messages.join("\n\n") : "(no output)";
+        content.append(result);
+      }
       tool.append(summary, content);
       assistant.body.append(tool);
     }

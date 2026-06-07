@@ -6,6 +6,7 @@ Lightweight hub UI for pi.
 
 ```bash
 pnpm install
+cp .env.example .env
 pnpm dev
 # open http://localhost:8787
 ```
@@ -17,7 +18,7 @@ pnpm build
 pnpm start
 ```
 
-Set `PORT` to override the default `8787`. The server binds to `127.0.0.1` by default.
+`pnpm dev` and `pnpm start` load `.env` automatically via Node's native `--env-file-if-exists`, so no `dotenv` package is required. Set `PORT` to override the default `8787`. The server binds to `127.0.0.1` by default. Keep real `.env` files out of git; commit `.env.example` only.
 
 ## Scheduled tasks
 

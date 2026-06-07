@@ -30,10 +30,10 @@ export function createFileSidebar({ state, api, $, errorMessage, insertPromptTex
         mention.className = "file-mention";
         mention.textContent = "@";
         row.append(name, mention);
-        row.onclick = () => entry.isDir ? void loadFiles(entry.path) : insertPromptText(`\`${entry.relativePath}\``);
+        row.onclick = () => entry.isDir ? void loadFiles(entry.path) : insertPromptText(`\`${entry.relativePath}\` `);
         mention.onclick = (ev) => {
           ev.stopPropagation();
-          insertPromptText(`\`${entry.relativePath}\``);
+          insertPromptText(`\`${entry.relativePath}\` `);
         };
         box.append(row);
       }
