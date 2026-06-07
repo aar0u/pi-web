@@ -37,7 +37,7 @@ Telegram support is optional. Enable it with:
 TELEGRAM_BOT_TOKEN_BUZZ=<bot-token> pnpm start
 ```
 
-Set `TELEGRAM_CHAT_ID_BUZZ=<chat-id>` to restrict the bot to one chat. Telegram prompts use a dedicated fixed working directory, defaulting to the server startup cwd. Override it with `PI_HUB_TELEGRAM_CWD=/path/to/project`. The Telegram session is persisted in `data/telegram-session.json`, so Telegram messages do not follow whichever cwd/session the Web UI currently has open.
+`TELEGRAM_CHAT_ID` is required when Telegram is enabled, so the bot only accepts approved chats. Use one chat id or a comma-separated allowlist, for example `TELEGRAM_CHAT_ID=123456789,987654321`. Telegram prompts use a dedicated fixed working directory, defaulting to the server startup cwd. Override it with `PI_HUB_TELEGRAM_CWD=/path/to/project`. The Telegram session is persisted in `data/telegram-session.json`, so Telegram messages do not follow whichever cwd/session the Web UI currently has open.
 
 Commands:
 

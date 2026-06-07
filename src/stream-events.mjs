@@ -18,6 +18,10 @@ function toolMessage(phase, toolName, details) {
   return `${icon} ${toolName} ${label}${suffix}`;
 }
 
+function toolPreview(details) {
+  return details === undefined ? "" : shortText(details);
+}
+
 function argsText(args) {
   if (typeof args === "string") return args;
   try {
@@ -42,21 +46,31 @@ function subscribePromptEventSink(session, { write = null, getState = null, onEv
         writeAssistantUpdate(write, event.assistantMessageEvent, onEvent);
         return;
       case "tool_execution_start":
-        write?.({ type: "tool", phase: "running", toolCallId: event.toolCallId, toolName: event.toolName, message: toolMessage("running", event.toolName, event.args) });
+        write?.({
+          type: "tool",
+          phase: "running",
+          toolCallId: event.toolCallId,
+          toolName: event.toolName,
+          preview: toolPreview(event.args),
+          message: toolMessage("running", event.toolName, event.args),
+        });
         return;
       case "tool_execution_update":
         write?.({ type: "tool", phase: "update", toolCallId: event.toolCallId, toolName: event.toolName, message: textOfContent(event.partialResult?.content) });
         return;
-      case "tool_execution_end":
+      case "tool_execution_end": {
+        const resultText = event.isError ? "error" : textOfContent(event.result?.content);
         write?.({
           type: "tool",
           phase: "done",
           toolCallId: event.toolCallId,
           toolName: event.toolName,
           isError: event.isError,
-          message: toolMessage("done", event.toolName, event.isError ? "error" : textOfContent(event.result?.content)),
+          preview: toolPreview(resultText),
+          message: toolMessage("done", event.toolName, resultText),
         });
         return;
+      }
       case "agent_end":
         if (getState) write?.({ type: "state", state: getState() });
         return;
@@ -104,6 +118,7 @@ function writeAssistantUpdate(write, update, onEvent = null) {
       toolCallId: update.toolCall.id,
       contentIndex: update.contentIndex,
       toolName: update.toolCall.name,
+      preview: toolPreview(update.toolCall.arguments),
       message: toolMessage("queued", update.toolCall.name, update.toolCall.arguments),
     });
   }

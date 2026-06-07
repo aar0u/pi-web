@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import { createServer } from "node:http";
 import { join, resolve } from "node:path";
-import { allowRemote, apiToken, host, isLoopbackHost, port, publicDir, schedulerIntervalMs, telegramBotToken, telegramChatId, telegramCwd as configuredTelegramCwd } from "./config.mjs";
+import { allowRemote, apiToken, host, isLoopbackHost, port, publicDir, schedulerIntervalMs, telegramBotToken, telegramChatIds, telegramCwd as configuredTelegramCwd } from "./config.mjs";
 import { HttpError, readBody, sendError, sendJson, writeNdjson } from "./http.mjs";
 import { makeRuntime, SessionManager } from "./pi-runtime.mjs";
 import { registerFilesRoutes } from "./routes/files.mjs";
@@ -590,7 +590,7 @@ async function handleApi(req, res, url) {
   }
 }
 
-const telegramBot = startTelegramBot({ token: telegramBotToken, allowedChatId: telegramChatId, taskStore, runner: promptRunner });
+const telegramBot = startTelegramBot({ token: telegramBotToken, allowedChatIds: telegramChatIds, taskStore, runner: promptRunner });
 const scheduler = startScheduler({
   taskStore,
   runner: promptRunner,
@@ -637,7 +637,7 @@ server.listen(port, host, () => {
   console.log(`port: ${port}`);
   console.log(`allow remote: ${allowRemote ? color("yes", colors.yellow) : "no"}`);
   console.log(`loopback host: ${isLoopbackHost ? color("yes", colors.green) : color("no", colors.yellow)}`);
-  console.log(`api token: ${apiToken ? color("enabled", colors.green) : "disabled"}`);
+  console.log(`api auth: ${apiToken ? color("token required", colors.green) : "no token (loopback/local only)"}`);
   console.log(`telegram bot: ${telegramBotToken ? color("enabled", colors.green) : "disabled"}`);
   if (telegramBotToken) console.log(`telegram cwd: ${fixedTelegramCwd}`);
   console.log(`task persistence: data/tasks.json + data/task-runs.jsonl`);

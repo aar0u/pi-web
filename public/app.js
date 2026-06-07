@@ -346,12 +346,6 @@ function thinkingPreview(text) {
     .trim();
 }
 
-function toolPreview(command, name) {
-  return (command || "")
-    .replace(new RegExp(`^[✓▶…]\\s*${name || ""}\\s*(queued|running|done|update)?\\s*`, "i"), "")
-    .trim();
-}
-
 function blockCommandText(block) {
   if (block?.type === "thinking") return thinkingPreview(block.text) || "thinking";
   return block?.call || block?.name || "tool";
@@ -368,13 +362,13 @@ function blockSummaryText(block) {
   return `tool: ${block.name || "tool"}`;
 }
 
-function appendToolSummary(summary, label, command, name) {
+function appendToolSummary(summary, label, previewText) {
   const title = document.createElement("span");
   title.className = "turn-tool-name";
   title.textContent = label;
   const preview = document.createElement("span");
   preview.className = "turn-tool-preview";
-  preview.textContent = toolPreview(command, name);
+  preview.textContent = previewText || "";
   preview.title = preview.textContent;
   summary.append(title, preview);
 }
@@ -592,7 +586,7 @@ function renderTurnBlock(block, body, ids, index) {
   const summary = document.createElement("summary");
   trackDetailsFoldState(summary, tool, foldKey);
   const label = block.type === "thinking" ? "thinking" : (block.name || "tool");
-  appendToolSummary(summary, label, blockCommandText(block), block.name || block.type);
+  appendToolSummary(summary, label, blockCommandText(block));
   addToolInspect(summary, `${block.type === "thinking" ? "Thinking" : "Tool"}: ${label}`, { type: block.type, ids, block });
   const content = document.createElement("div");
   content.className = "turn-tool-body";
@@ -1340,7 +1334,7 @@ async function sendPrompt(text) {
     const key = streamToolKey(evt, name, blockType);
     let part = streamToolParts.get(key);
     if (!part) {
-      part = { key, type: blockType, name, phase: normalizeStreamPhase(evt.phase), createdAt: Date.now(), startedAt: null, endedAt: null, command: "", messages: [], error: false };
+      part = { key, type: blockType, name, phase: normalizeStreamPhase(evt.phase), createdAt: Date.now(), startedAt: null, endedAt: null, command: "", preview: "", messages: [], error: false };
       streamToolParts.set(key, part);
       streamParts.push(part);
     }
@@ -1350,10 +1344,13 @@ async function sendPrompt(text) {
     if (part.phase === "running" && !part.startedAt) part.startedAt = Date.now();
     if (part.phase === "done" && !part.endedAt) part.endedAt = Date.now();
     part.error = Boolean(evt.isError || part.error);
-    if (evt.message) {
-      if (evt.phase === "queued" || evt.phase === "running") part.command = evt.message;
-      else if (part.type === "thinking") part.messages[0] = `${part.messages[0] || ""}${evt.message}`;
-      else part.messages.push(evt.message);
+    const eventText = evt.preview ?? evt.message;
+    if (eventText) {
+      if (evt.phase === "queued" || evt.phase === "running") {
+        part.command = eventText;
+        part.preview = eventText;
+      } else if (part.type === "thinking") part.messages[0] = `${part.messages[0] || ""}${eventText}`;
+      else part.messages.push(eventText);
       if (part.type === "thinking") part.command = thinkingPreview(part.messages[0] || "") || part.command;
     }
     activeToolPart = part.phase === "done" ? [...streamParts].reverse().find((p) => p.type !== "text" && p.phase !== "done") || null : part;
@@ -1382,7 +1379,7 @@ async function sendPrompt(text) {
       trackDetailsFoldState(summary, tool, foldKey, streamDetails);
       const phaseText = streamPhaseText(part);
       const label = part.type === "thinking" ? "thinking" : (part.name || "tool");
-      appendToolSummary(summary, `${label} · ${phaseText}`, part.command, part.name);
+      appendToolSummary(summary, `${label} · ${phaseText}`, part.preview || part.command);
       addToolInspect(summary, `${part.type === "thinking" ? "Thinking" : "Tool"}: ${label}`, { type: `streaming-${part.type}`, part });
       const content = document.createElement("div");
       content.className = "turn-tool-body";
